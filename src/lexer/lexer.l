@@ -1,43 +1,77 @@
+%option noyywrap nounput noinput yylineno
+
 %{
+#include "parser.tab.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 %}
 
-%option noyywrap
-
-DIGIT      [0-9]
-ID         [a-zA-Z_][a-zA-Z0-9_]*
-
-%%
-
-"let"              { printf("TOKEN_LET\n"); }
-"fn"               { printf("TOKEN_FN\n"); }
-"if"               { printf("TOKEN_IF\n"); }
-"else"             { printf("TOKEN_ELSE\n"); }
-"while"            { printf("TOKEN_WHILE\n"); }
-
-"+"                { printf("TOKEN_PLUS\n"); }
-"-"                { printf("TOKEN_MINUS\n"); }
-"*"                { printf("TOKEN_MULT\n"); }
-"/"                { printf("TOKEN_DIV\n"); }
-
-"="                { printf("TOKEN_ASSIGN\n"); }
-";"                { printf("TOKEN_SEMICOLON\n"); }
-"("                { printf("TOKEN_LPAREN\n"); }
-")"                { printf("TOKEN_RPAREN\n"); }
-"{"                { printf("TOKEN_LBRACE\n"); }
-"}"                { printf("TOKEN_RBRACE\n"); }
-
-{DIGIT}+           { printf("TOKEN_NUMBER: %s\n", yytext); }
-{ID}               { printf("TOKEN_ID: %s\n", yytext); }
-
-[ \t\n]+           { /* ignorar espacios */ }
-
-.                  { printf("ERROR: caracter desconocido %s\n", yytext); }
+DIGIT       [0-9]
+ID_START    [a-zA-Z_]
+ID_CHAR     [a-zA-Z0-9_]
 
 %%
 
-int main() {
-    yylex();
-    return 0;
-}
+"fn"            { return FN; }
+"let"           { return LET; }
+"if"            { return IF; }
+"else"          { return ELSE; }
+"while"         { return WHILE; }
+"for"           { return FOR; }
+"in"            { return IN; }
+"return"        { return RETURN; }
+
+"i32"           { yylval.text = strdup(yytext); return TYPE; }
+"f64"           { yylval.text = strdup(yytext); return TYPE; }
+"bool"          { yylval.text = strdup(yytext); return TYPE; }
+"char"          { yylval.text = strdup(yytext); return TYPE; }
+"str"           { yylval.text = strdup(yytext); return TYPE; }
+
+"true"          { yylval.text = strdup(yytext); return BOOL_LITERAL; }
+"false"         { yylval.text = strdup(yytext); return BOOL_LITERAL; }
+
+{DIGIT}+"."{DIGIT}+      { yylval.text = strdup(yytext); return FLOAT_LITERAL; }
+{DIGIT}+                 { yylval.text = strdup(yytext); return INT_LITERAL; }
+
+\'([^\\\n]|(\\.))\'      { yylval.text = strdup(yytext); return CHAR_LITERAL; }
+\"([^\\\n]|(\\.))*\"     { yylval.text = strdup(yytext); return STRING_LITERAL; }
+
+"=="            { return EQ; }
+"!="            { return NEQ; }
+"<="            { return LE; }
+">="            { return GE; }
+"&&"            { return AND; }
+"||"            { return OR; }
+"->"            { return ARROW; }
+".."            { return RANGE; }
+
+"<"             { return LT; }
+">"             { return GT; }
+"!"             { return NOT; }
+"+"             { return PLUS; }
+"-"             { return MINUS; }
+"*"             { return MUL; }
+"/"             { return DIV; }
+"="             { return ASSIGN; }
+
+"("             { return LPAREN; }
+")"             { return RPAREN; }
+"{"             { return LBRACE; }
+"}"             { return RBRACE; }
+"["             { return LBRACKET; }
+"]"             { return RBRACKET; }
+","             { return COMMA; }
+";"             { return SEMICOLON; }
+":"             { return COLON; }
+
+{ID_START}{ID_CHAR}*     { yylval.text = strdup(yytext); return IDENTIFIER; }
+
+[ \t\r\n]+      { }
+"//".*          { }
+
+.               {
+                    fprintf(stderr, "Error lexico en linea %d: simbolo no reconocido '%s'\n", yylineno, yytext);
+                }
+
+%%
