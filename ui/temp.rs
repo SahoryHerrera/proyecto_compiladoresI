@@ -1,14 +1,10 @@
-// test1_basico.rs
-// Ejemplo EXACTO del documento del proyecto
-// Compiladores I - UNITEC
-
 fn suma(a: i32, b: i32) -> i32 {
     return a + b;
 }
 
 fn main() {
-    let x = 10;
-    let y = 20;
+    let x: i32 = 10;
+    let y: i32 = 20;
 
     if x < y {
         let resultado = suma(x, y);
