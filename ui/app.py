@@ -1,64 +1,56 @@
 """
 ================================================================
- app.py  -  Entorno grafico para el Compilador Rust (subset)
- Proyecto 1 - Compiladores I | UNITEC
+ app.py  -  Compilador Rust (subset) | Compiladores I UNITEC
 ================================================================
-
-Uso:
-    python app.py
-    (requiere que build/compiler este compilado con 'make')
-
-Caracteristicas:
-  - Editor con numeracion de lineas, undo, atajos de teclado
-  - 3 pestanas de salida: Tokens / AST / Consola
-  - Coloreo semantico en cada pestana
-  - Deteccion automatica del compilador en build/compiler
-  - Menu completo, barra de estado, indicador de cursor
 """
 
 import tkinter as tk
 from tkinter import filedialog, scrolledtext, messagebox, font, ttk
 import subprocess
 import os
+import re
 
 # ================================================================
-#  PALETA DE COLORES (GitHub Dark)
+#  PALETA  —  One Dark Pro refinada
 # ================================================================
 C = {
-    "bg":        "#0d1117",
-    "panel":     "#161b22",
-    "border":    "#30363d",
-    "toolbar":   "#21262d",
-    "text":      "#e6edf3",
-    "muted":     "#8b949e",
-    "accent":    "#58a6ff",
-    "green":     "#3fb950",
-    "red":       "#f85149",
-    "yellow":    "#d29922",
-    "orange":    "#f0883e",
-    "purple":    "#bc8cff",
-    "btn_bg":    "#21262d",
-    "btn_hover": "#30363d",
-    "run_bg":    "#238636",
-    "run_hover": "#2ea043",
+    "bg":          "#1a1d23",
+    "bg2":         "#21252b",
+    "bg3":         "#282c34",
+    "border":      "#3d4148",
+    "border2":     "#4b5263",
+    "text":        "#abb2bf",
+    "text_bright": "#dde1e8",
+    "muted":       "#5c6370",
+    "accent":      "#61afef",
+    "accent2":     "#528bff",
+    "green":       "#98c379",
+    "red":         "#e06c75",
+    "yellow":      "#e5c07b",
+    "orange":      "#d19a66",
+    "purple":      "#c678dd",
+    "cyan":        "#56b6c2",
+    "btn":         "#2c313a",
+    "btn_hover":   "#3a3f4b",
+    "run":         "#3a7c3a",
+    "run_hover":   "#4a9e4a",
 }
 
 # ================================================================
-#  ESTADO GLOBAL
+#  ESTADO
 # ================================================================
 current_file  = None
 compiler_path = None
+_modified     = False
 
 
 def find_compiler():
-    """Busca build/compiler relativo al script o al cwd."""
     base = os.path.dirname(os.path.abspath(__file__))
-    candidates = [
-        os.path.join(base,       "build", "compiler"),
-        os.path.join(base, "..", "build", "compiler"),
-        os.path.join(os.getcwd(),"build", "compiler"),
-    ]
-    for p in candidates:
+    for p in [
+        os.path.join(base,        "build", "compiler"),
+        os.path.join(base, "..",  "build", "compiler"),
+        os.path.join(os.getcwd(), "build", "compiler"),
+    ]:
         p = os.path.normpath(p)
         if os.path.isfile(p) and os.access(p, os.X_OK):
             return p
@@ -66,21 +58,24 @@ def find_compiler():
 
 
 # ================================================================
-#  HELPERS DE UI
+#  UTILIDADES UI
 # ================================================================
-def make_button(parent, text, cmd, bg, hover_bg, **kw):
-    b = tk.Button(
-        parent, text=text, command=cmd,
-        bg=bg, fg=C["text"],
-        activebackground=hover_bg, activeforeground=C["text"],
-        relief="flat", cursor="hand2",
-        padx=12, pady=5, font=("Consolas", 9), bd=0, **kw)
-    b.bind("<Enter>", lambda e: b.config(bg=hover_bg))
+def _btn(parent, text, cmd, bg=None, hover=None, fg=None, **kw):
+    bg    = bg    or C["btn"]
+    hover = hover or C["btn_hover"]
+    fg    = fg    or C["text_bright"]
+    b = tk.Button(parent, text=text, command=cmd,
+                  bg=bg, fg=fg, activebackground=hover,
+                  activeforeground=C["text_bright"],
+                  relief="flat", cursor="hand2",
+                  padx=14, pady=6,
+                  font=("Consolas", 9), bd=0, **kw)
+    b.bind("<Enter>", lambda e: b.config(bg=hover))
     b.bind("<Leave>", lambda e: b.config(bg=bg))
     return b
 
 
-def append_text(widget, text, tag=None):
+def _write(widget, text, tag=None):
     widget.config(state="normal")
     if tag:
         widget.insert(tk.END, text, tag)
@@ -94,11 +89,37 @@ def limpiar_salida():
         w.config(state="normal")
         w.delete("1.0", tk.END)
         w.config(state="disabled")
+    _set_tab_badge(tab_tokens,  "Tokens",  None)
+    _set_tab_badge(tab_ast,     "AST",     None)
+    _set_tab_badge(tab_console, "Consola", None)
 
 
 # ================================================================
-#  MANEJO DE ARCHIVOS
+#  BADGES en pestanas
 # ================================================================
+def _set_tab_badge(tab, label, status):
+    icons = {"ok": " ✓", "err": " ✗", "warn": " ⚠", None: ""}
+    notebook.tab(tab, text=f"  {label}{icons[status]}  ")
+
+
+# ================================================================
+#  ARCHIVOS
+# ================================================================
+def _mark_modified():
+    global _modified
+    _modified = True
+    title = root.title()
+    if not title.startswith("● "):
+        root.title("● " + title)
+
+
+def _mark_saved():
+    global _modified
+    _modified = False
+    title = root.title().lstrip("● ")
+    root.title(title)
+
+
 def abrir_archivo():
     global current_file
     path = filedialog.askopenfilename(
@@ -109,17 +130,20 @@ def abrir_archivo():
     with open(path, "r", encoding="utf-8") as f:
         editor.delete("1.0", tk.END)
         editor.insert(tk.END, f.read())
-    root.title(f"Compilador Rust  -  {os.path.basename(path)}")
-    actualizar_estado(f"Archivo: {os.path.basename(path)}")
+    root.title(f"Compilador Rust  —  {os.path.basename(path)}")
+    _mark_saved()
+    actualizar_estado(f"  {os.path.basename(path)}")
     actualizar_numeros_linea()
+    _highlight_syntax()
 
 
-def guardar_archivo():
+def guardar_archivo(event=None):
     global current_file
     if current_file:
         with open(current_file, "w", encoding="utf-8") as f:
             f.write(editor.get("1.0", tk.END))
-        actualizar_estado(f"Guardado: {os.path.basename(current_file)}")
+        _mark_saved()
+        actualizar_estado(f"  Guardado — {os.path.basename(current_file)}")
     else:
         guardar_como()
 
@@ -127,224 +151,231 @@ def guardar_archivo():
 def guardar_como():
     global current_file
     path = filedialog.asksaveasfilename(
-        defaultextension=".rs",
-        filetypes=[("Rust Files", "*.rs")])
+        defaultextension=".rs", filetypes=[("Rust Files", "*.rs")])
     if not path:
         return
     current_file = path
     with open(path, "w", encoding="utf-8") as f:
         f.write(editor.get("1.0", tk.END))
-    root.title(f"Compilador Rust  -  {os.path.basename(path)}")
-    actualizar_estado(f"Guardado: {os.path.basename(path)}")
+    root.title(f"Compilador Rust  —  {os.path.basename(path)}")
+    _mark_saved()
+    actualizar_estado(f"  Guardado — {os.path.basename(path)}")
 
 
 def nuevo_archivo():
     global current_file
-    if not messagebox.askyesno("Nuevo archivo",
-                                "Descartar cambios y crear archivo nuevo?"):
-        return
+    if _modified:
+        if not messagebox.askyesno("Nuevo archivo",
+                                   "Hay cambios sin guardar. ¿Continuar?"):
+            return
     current_file = None
     editor.delete("1.0", tk.END)
     limpiar_salida()
-    root.title("Compilador Rust  -  UNITEC")
-    actualizar_estado("Listo")
+    root.title("Compilador Rust  —  UNITEC")
+    _mark_saved()
+    actualizar_estado("  Listo")
     actualizar_numeros_linea()
 
 
 def seleccionar_compilador():
     global compiler_path
-    path = filedialog.askopenfilename(
-        title="Seleccionar ejecutable del compilador")
+    path = filedialog.askopenfilename(title="Seleccionar ejecutable")
     if path:
         compiler_path = path
-        actualizar_estado(f"Compilador: {path}")
+        actualizar_estado(f"  Compilador: {os.path.basename(path)}")
 
 
 # ================================================================
-#  EJECUCION DEL COMPILADOR
+#  SYNTAX HIGHLIGHTING  (simple, basado en regex)
 # ================================================================
-def ejecutar_codigo():
+KW_PATTERN = r'\b(fn|let|mut|if|else|while|for|in|return|true|false|println)\b'
+TYPE_PATTERN = r'\b(i32|i64|f64|f32|bool|char|str|usize)\b'
+NUM_PATTERN = r'\b\d+(\.\d+)?\b'
+STR_PATTERN = r'"[^"]*"'
+CHAR_PATTERN = r"'[^']*'"
+CMT_PATTERN = r'//.*$'
+
+
+def _highlight_syntax(event=None):
+    for tag in ("hl_kw","hl_type","hl_num","hl_str","hl_cmt","hl_op"):
+        editor.tag_remove(tag, "1.0", tk.END)
+
+    content = editor.get("1.0", tk.END)
+    lines   = content.split("\n")
+
+    for lineno, line in enumerate(lines, start=1):
+        def apply(pat, tag, flags=0):
+            for m in re.finditer(pat, line, flags):
+                s = f"{lineno}.{m.start()}"
+                e = f"{lineno}.{m.end()}"
+                editor.tag_add(tag, s, e)
+
+        apply(CMT_PATTERN,  "hl_cmt")
+        apply(STR_PATTERN,  "hl_str")
+        apply(CHAR_PATTERN, "hl_str")
+        apply(KW_PATTERN,   "hl_kw")
+        apply(TYPE_PATTERN, "hl_type")
+        apply(NUM_PATTERN,  "hl_num")
+
+    root.after(0, _update_line_count)
+
+
+# ================================================================
+#  EJECUCION
+# ================================================================
+def ejecutar_codigo(event=None):
     global compiler_path
 
-    # Resolver ruta del compilador
     if not compiler_path:
         compiler_path = find_compiler()
 
     if not compiler_path:
         limpiar_salida()
-        append_text(out_console,
-            "ERROR: Compilador no encontrado.\n\n"
-            "  Ejecuta 'make' en la raiz del proyecto para\n"
-            "  generar build/compiler, luego vuelve a intentarlo.\n\n"
-            "  O usa el menu: Archivo -> Seleccionar compilador...\n",
-            "error")
+        _write(out_console,
+            "  ERROR: Compilador no encontrado.\n\n"
+            "  Ejecuta 'make' en la raiz del proyecto\n"
+            "  para generar build/compiler.\n\n"
+            "  O usa: Archivo → Seleccionar compilador...\n", "error")
         notebook.select(tab_console)
-        actualizar_estado("ERROR: Compilador no encontrado")
+        actualizar_estado("  ERROR: Compilador no encontrado")
         return
 
-    # Guardar codigo en archivo temporal junto al script
-    codigo  = editor.get("1.0", tk.END)
-    base    = os.path.dirname(os.path.abspath(__file__))
-    tmp     = os.path.join(base, "_temp_compile.rs")
+    codigo = editor.get("1.0", tk.END)
+    base   = os.path.dirname(os.path.abspath(__file__))
+    tmp    = os.path.join(base, "_tmp.rs")
 
     with open(tmp, "w", encoding="utf-8") as f:
         f.write(codigo)
 
     limpiar_salida()
-    actualizar_estado("Analizando...")
+    actualizar_estado("  Analizando...")
+    run_btn.config(text="  ⏳ Analizando...", state="disabled")
     root.update_idletasks()
 
     try:
         proc = subprocess.run(
             [compiler_path, tmp],
             capture_output=True, text=True, timeout=15)
-        _distribuir_salida(proc.stdout, proc.stderr, proc.returncode)
-
+        _distribuir(proc.stdout, proc.stderr, proc.returncode)
     except FileNotFoundError:
-        append_text(out_console,
-            f"ERROR: No se pudo ejecutar:\n  {compiler_path}\n"
-            "Verifica que el archivo sea ejecutable.\n", "error")
+        _write(out_console, f"  ERROR: No se pudo ejecutar:\n  {compiler_path}\n", "error")
         notebook.select(tab_console)
-        actualizar_estado("ERROR: No se pudo ejecutar el compilador")
-
+        actualizar_estado("  ERROR al ejecutar")
     except subprocess.TimeoutExpired:
-        append_text(out_console,
-            "ERROR: Tiempo de analisis agotado (15s)\n", "error")
-        actualizar_estado("ERROR: Tiempo agotado")
-
+        _write(out_console, "  ERROR: Tiempo agotado (15s)\n", "error")
+        actualizar_estado("  Tiempo agotado")
     except Exception as exc:
-        append_text(out_console, f"ERROR inesperado: {exc}\n", "error")
-        actualizar_estado("ERROR inesperado")
-
+        _write(out_console, f"  ERROR: {exc}\n", "error")
     finally:
+        run_btn.config(text="  ▶  Analizar", state="normal")
         try:
             os.remove(tmp)
         except Exception:
             pass
 
 
-# ================================================================
-#  DISTRIBUCION DE SALIDA EN PESTANAS
-#
-#  El compilador imprime marcadores en stdout:
-#    ###TOKENS###  ->  todo lo que siga va a pestana Tokens
-#    ###AST###     ->  todo lo que siga va a pestana AST
-#    ###FIN###     ->  todo lo que siga va a pestana Consola
-#  stderr siempre va a Consola.
-# ================================================================
-def _distribuir_salida(stdout, stderr, returncode):
+def _distribuir(stdout, stderr, returncode):
     section = "console"
+    tok_count = 0
 
     for line in stdout.splitlines():
-        if   "###TOKENS###" in line:
-            section = "tokens"
-            continue
-        elif "###AST###"    in line:
-            section = "ast"
-            continue
-        elif "###FIN###"    in line:
-            section = "console"
-            continue
+        if   "###TOKENS###" in line: section = "tokens"; continue
+        elif "###AST###"    in line: section = "ast";    continue
+        elif "###FIN###"    in line: section = "console";continue
 
-        if   section == "tokens":  _linea_token(line)
-        elif section == "ast":     _linea_ast(line)
-        else:                      _linea_consola(line)
+        if   section == "tokens":
+            _linea_token(line)
+            if line.strip().startswith("[L"):
+                tok_count += 1
+        elif section == "ast":   _linea_ast(line)
+        else:                    _linea_consola(line)
 
-    # stderr -> siempre Consola
     if stderr:
-        append_text(out_console, "\n-- Errores --\n", "header")
+        _write(out_console, "\n  Errores\n", "section_hdr")
+        _write(out_console, "  " + "─"*40 + "\n", "dim")
         for line in stderr.splitlines():
             up = line.upper()
-            if "ERROR"   in up: tag = "error"
-            elif "WARNING" in up: tag = "warning"
-            else:                 tag = "muted"
-            append_text(out_console, line + "\n", tag)
+            tag = "error" if "ERROR" in up else "warning" if "WARNING" in up else "dim"
+            _write(out_console, "  " + line + "\n", tag)
 
-    # Estado final
     if returncode == 0:
-        append_text(out_console,
-            "\n  Analisis completado exitosamente\n", "success")
-        actualizar_estado("Analisis exitoso")
+        _write(out_console, "\n  ✓  Analisis completado exitosamente\n", "success")
+        actualizar_estado(f"  ✓  {tok_count} tokens — exitoso")
+        _set_tab_badge(tab_tokens,  "Tokens",  "ok")
+        _set_tab_badge(tab_ast,     "AST",     "ok")
+        _set_tab_badge(tab_console, "Consola", "ok")
         notebook.select(tab_tokens)
     else:
-        append_text(out_console,
-            "\n  Se encontraron errores\n", "error")
-        actualizar_estado("Errores encontrados")
+        _write(out_console, "\n  ✗  Se encontraron errores\n", "error")
+        actualizar_estado("  ✗  Errores encontrados")
+        _set_tab_badge(tab_console, "Consola", "err")
         notebook.select(tab_console)
 
 
 # ================================================================
-#  COLOREO DE LINEAS POR PESTANA
+#  COLOREO POR PESTANA
 # ================================================================
 def _linea_token(line):
-    """Colorea una linea de token segun su tipo."""
     s = line.strip()
-    if not s or s.startswith("-"):
-        return
+    if not s or s.startswith("-"): return
     if s.startswith("[L"):
         end = line.find("]")
-        if end != -1:
-            pos  = line[:end + 1]
-            rest = line[end + 1:]
-            append_text(out_tokens, pos, "muted")
-            tipo = rest.strip().split()[0] if rest.strip() else ""
-            if   tipo.startswith("KW_"):                     tag = "keyword"
-            elif tipo == "TYPE":                             tag = "type_tok"
-            elif tipo.startswith("LIT_"):                    tag = "literal"
-            elif tipo == "PRINTLN":                          tag = "keyword"
-            elif tipo.startswith("OP_") or tipo == "ASSIGN": tag = "operator"
-            elif tipo in ("ARROW", "DOT_DOT"):               tag = "operator"
-            elif tipo == "IDENTIFIER":                       tag = "ident"
-            else:                                            tag = "delim"
-            append_text(out_tokens, rest + "\n", tag)
-        else:
-            append_text(out_tokens, line + "\n", "normal")
+        if end == -1:
+            _write(out_tokens, line + "\n"); return
+        pos  = line[:end+1]
+        rest = line[end+1:]
+        tipo = rest.strip().split()[0] if rest.strip() else ""
+        _write(out_tokens, "  " + pos, "tok_pos")
+        if   tipo.startswith("KW_"):                          tag = "tok_kw"
+        elif tipo == "TYPE":                                  tag = "tok_type"
+        elif tipo.startswith("LIT_"):                         tag = "tok_lit"
+        elif tipo == "PRINTLN":                               tag = "tok_kw"
+        elif tipo.startswith("OP_") or tipo in ("ASSIGN",
+             "ARROW","DOT_DOT"):                              tag = "tok_op"
+        elif tipo == "IDENTIFIER":                            tag = "tok_id"
+        else:                                                 tag = "tok_delim"
+        _write(out_tokens, rest + "\n", tag)
     else:
-        append_text(out_tokens, line + "\n", "header")
+        _write(out_tokens, "  " + line + "\n", "dim")
 
 
 def _linea_ast(line):
-    """Colorea una linea del AST segun el tipo de nodo."""
     s = line.strip()
-    if not s or s.startswith("-"):
-        return
-    if   s.startswith("Function"):                           tag = "ast_func"
-    elif s.startswith("Let") or s.startswith("Assign"):     tag = "ast_let"
-    elif any(s.startswith(k) for k in
-             ("If","While","For","Return")):                  tag = "ast_ctrl"
+    if not s or s.startswith("-"): return
+    indent = len(line) - len(line.lstrip())
+    pad    = "  " + " " * indent
+    if   s.startswith("Function"):   tag = "ast_fn"
+    elif s.startswith("Let") or s.startswith("Assign"): tag = "ast_let"
+    elif any(s.startswith(k) for k in ("If","While","For","Return")): tag = "ast_ctrl"
     elif s.startswith("BinaryOp") or s.startswith("UnaryOp"): tag = "ast_op"
-    elif s.startswith("Call"):                               tag = "ast_call"
-    elif s.startswith("Literal"):                            tag = "ast_lit"
-    elif s.startswith("Identifier"):                         tag = "ast_id"
-    elif s.startswith("Program") or s.startswith("Block") \
-         or s.startswith("Param"):                           tag = "header"
-    else:                                                    tag = "normal"
-    append_text(out_ast, line + "\n", tag)
+    elif s.startswith("Call"):        tag = "ast_call"
+    elif s.startswith("Literal"):     tag = "ast_lit"
+    elif s.startswith("Identifier"):  tag = "ast_id"
+    elif s.startswith("Program") or s.startswith("Block") or s.startswith("Param"): tag = "ast_struct"
+    else:                             tag = "ast_dim"
+    _write(out_ast, pad + s + "\n", tag)
 
 
 def _linea_consola(line):
-    """Colorea una linea de la seccion Consola."""
     s = line.strip()
     if not s:
-        append_text(out_console, "\n")
-        return
-    if   "exitosamente" in s:         tag = "success"
-    elif "RESULTADO" in s \
-         and "error" in s.lower():    tag = "error"
-    elif s.startswith("===") \
-         or s.startswith("---"):      tag = "header"
-    else:                             tag = "normal"
-    append_text(out_console, line + "\n", tag)
+        _write(out_console, "\n"); return
+    if   "exitosamente" in s:                               tag = "success"
+    elif "RESULTADO" in s and "error" in s.lower():         tag = "error"
+    elif s.startswith("===") or s.startswith("---"):        tag = "dim"
+    elif s.startswith("Compilador") or s.startswith("Arch"): tag = "info"
+    else:                                                   tag = "normal"
+    _write(out_console, "  " + line + "\n", tag)
 
 
 # ================================================================
-#  BARRA DE ESTADO Y NUMEROS DE LINEA
+#  ESTADO, LINEAS, CURSOR
 # ================================================================
-def actualizar_estado(msg="Listo"):
-    status_label.config(text=f"  {msg}")
+def actualizar_estado(msg="  Listo"):
+    status_label.config(text=msg)
 
 
-def actualizar_numeros_linea(event=None):
+def _update_line_count(event=None):
     lineas = editor.get("1.0", tk.END).count("\n")
     nums   = "\n".join(str(i) for i in range(1, lineas + 2))
     line_numbers.config(state="normal")
@@ -353,13 +384,25 @@ def actualizar_numeros_linea(event=None):
     line_numbers.config(state="disabled")
 
 
+def actualizar_numeros_linea(event=None):
+    _update_line_count()
+
+
 def actualizar_cursor(event=None):
     try:
-        pos      = editor.index(tk.INSERT)
-        ln, col  = pos.split(".")
-        cursor_label.config(text=f"Ln {ln}, Col {int(col)+1}  ")
+        pos     = editor.index(tk.INSERT)
+        ln, col = pos.split(".")
+        lines   = int(editor.index("end-1c").split(".")[0])
+        cursor_label.config(text=f"  Ln {ln}/{lines}  Col {int(col)+1}  ")
     except Exception:
         pass
+
+
+def _on_key(event=None):
+    _mark_modified()
+    _update_line_count()
+    actualizar_cursor()
+    root.after(300, _highlight_syntax)
 
 
 def bind_shortcuts():
@@ -367,172 +410,260 @@ def bind_shortcuts():
     root.bind("<Control-s>",      lambda e: guardar_archivo())
     root.bind("<Control-Return>", lambda e: ejecutar_codigo())
     root.bind("<Control-n>",      lambda e: nuevo_archivo())
-    editor.bind("<KeyRelease>",
-        lambda e: (actualizar_numeros_linea(), actualizar_cursor(e)))
+    editor.bind("<KeyRelease>",   _on_key)
     editor.bind("<ButtonRelease>", actualizar_cursor)
 
 
 # ================================================================
-#  CONSTRUCCION DE LA VENTANA
+#  VENTANA PRINCIPAL
 # ================================================================
 root = tk.Tk()
-root.title("Compilador Rust  -  UNITEC")
-root.geometry("1100x800")
-root.minsize(750, 550)
+root.title("Compilador Rust  —  UNITEC")
+root.geometry("1200x820")
+root.minsize(800, 560)
 root.configure(bg=C["bg"])
 
-# ---- Menu ----
-menubar = tk.Menu(root, bg=C["toolbar"], fg=C["text"],
-                  activebackground=C["accent"], activeforeground="white",
+# ---- Menubar ----
+menubar = tk.Menu(root, bg=C["bg2"], fg=C["text"],
+                  activebackground=C["accent2"], activeforeground=C["text_bright"],
                   relief="flat", bd=0)
 
-m_arch = tk.Menu(menubar, tearoff=0, bg=C["toolbar"], fg=C["text"],
-                 activebackground=C["accent"], activeforeground="white")
-m_arch.add_command(label="Nuevo              Ctrl+N", command=nuevo_archivo)
-m_arch.add_command(label="Abrir...           Ctrl+O", command=abrir_archivo)
-m_arch.add_separator()
-m_arch.add_command(label="Guardar            Ctrl+S", command=guardar_archivo)
-m_arch.add_command(label="Guardar como...",           command=guardar_como)
-m_arch.add_separator()
-m_arch.add_command(label="Seleccionar compilador...", command=seleccionar_compilador)
-m_arch.add_separator()
-m_arch.add_command(label="Salir",                     command=root.quit)
-menubar.add_cascade(label="Archivo", menu=m_arch)
+def _menu(label, items):
+    m = tk.Menu(menubar, tearoff=0, bg=C["bg2"], fg=C["text"],
+                activebackground=C["accent2"], activeforeground=C["text_bright"],
+                relief="flat", bd=1)
+    for item in items:
+        if item is None:
+            m.add_separator()
+        else:
+            m.add_command(label=item[0], command=item[1])
+    menubar.add_cascade(label=label, menu=m)
 
-m_run = tk.Menu(menubar, tearoff=0, bg=C["toolbar"], fg=C["text"],
-                activebackground=C["accent"], activeforeground="white")
-m_run.add_command(label="Analizar   Ctrl+Enter", command=ejecutar_codigo)
-m_run.add_command(label="Limpiar salida",         command=limpiar_salida)
-menubar.add_cascade(label="Ejecutar", menu=m_run)
-
+_menu("Archivo", [
+    ("Nuevo              Ctrl+N", nuevo_archivo),
+    ("Abrir...           Ctrl+O", abrir_archivo),
+    None,
+    ("Guardar            Ctrl+S", guardar_archivo),
+    ("Guardar como...",           guardar_como),
+    None,
+    ("Seleccionar compilador...", seleccionar_compilador),
+    None,
+    ("Salir", root.quit),
+])
+_menu("Ejecutar", [
+    ("Analizar   Ctrl+Enter", ejecutar_codigo),
+    ("Limpiar salida",         limpiar_salida),
+])
 root.config(menu=menubar)
 
-# ---- Toolbar ----
-toolbar = tk.Frame(root, bg=C["toolbar"], pady=6)
-toolbar.pack(fill="x")
+# ================================================================
+#  HEADER BAR
+# ================================================================
+header = tk.Frame(root, bg=C["bg2"], height=48)
+header.pack(fill="x", side="top")
+header.pack_propagate(False)
 
-make_button(toolbar, "Nuevo",   nuevo_archivo,   C["btn_bg"], C["btn_hover"]).pack(side="left", padx=(8,2))
-make_button(toolbar, "Abrir",   abrir_archivo,   C["btn_bg"], C["btn_hover"]).pack(side="left", padx=2)
-make_button(toolbar, "Guardar", guardar_archivo, C["btn_bg"], C["btn_hover"]).pack(side="left", padx=2)
-tk.Frame(toolbar, bg=C["border"], width=1, height=24).pack(side="left", padx=10, pady=2)
-make_button(toolbar, "Analizar  Ctrl+Enter", ejecutar_codigo,
-            C["run_bg"], C["run_hover"]).pack(side="left", padx=2)
-make_button(toolbar, "Limpiar", limpiar_salida, C["btn_bg"], C["btn_hover"]).pack(side="left", padx=2)
+# Logo / título
+tk.Label(header, text="🦀  Compilador Rust",
+         bg=C["bg2"], fg=C["text_bright"],
+         font=("Consolas", 13, "bold")).pack(side="left", padx=16, pady=8)
 
-# ---- Panel divisor vertical ----
-pane = tk.PanedWindow(root, orient=tk.VERTICAL, bg=C["border"],
-                       sashwidth=5, sashpad=0, sashrelief="flat")
+tk.Frame(header, bg=C["border"], width=1).pack(side="left", fill="y", pady=8)
+
+# Botones
+_btn(header, "  🗋  Nuevo",   nuevo_archivo).pack(side="left", padx=(8,2), pady=8)
+_btn(header, "  📂  Abrir",   abrir_archivo).pack(side="left", padx=2,    pady=8)
+_btn(header, "  💾  Guardar", guardar_archivo).pack(side="left", padx=2,  pady=8)
+
+tk.Frame(header, bg=C["border"], width=1).pack(side="left", fill="y", pady=8, padx=6)
+
+run_btn = _btn(header, "  ▶  Analizar",
+               ejecutar_codigo, bg=C["run"], hover=C["run_hover"],
+               fg="#ffffff")
+run_btn.pack(side="left", padx=2, pady=8)
+
+_btn(header, "  ✕  Limpiar", limpiar_salida).pack(side="left", padx=2, pady=8)
+
+# ================================================================
+#  LAYOUT PRINCIPAL
+# ================================================================
+pane = tk.PanedWindow(root, orient=tk.HORIZONTAL, bg=C["border"],
+                      sashwidth=4, sashpad=0, sashrelief="flat")
 pane.pack(fill="both", expand=True)
 
-# ---- Panel Editor ----
-ef = tk.Frame(pane, bg=C["bg"])
-tk.Label(ef, text="  EDITOR", bg=C["panel"], fg=C["muted"],
-         font=("Consolas", 8, "bold"), anchor="w", pady=4).pack(fill="x")
+# ================================================================
+#  PANEL IZQUIERDO — EDITOR
+# ================================================================
+left = tk.Frame(pane, bg=C["bg"])
 
-ei = tk.Frame(ef, bg=C["panel"])
-ei.pack(fill="both", expand=True)
+# Cabecera del editor
+editor_hdr = tk.Frame(left, bg=C["bg3"], height=30)
+editor_hdr.pack(fill="x")
+editor_hdr.pack_propagate(False)
+tk.Label(editor_hdr, text="  EDITOR",
+         bg=C["bg3"], fg=C["muted"],
+         font=("Consolas", 8, "bold")).pack(side="left", padx=8, pady=6)
+
+file_label = tk.Label(editor_hdr, text="sin titulo",
+                      bg=C["bg3"], fg=C["muted"],
+                      font=("Consolas", 8))
+file_label.pack(side="left")
+
+# Contenedor editor
+editor_body = tk.Frame(left, bg=C["bg3"])
+editor_body.pack(fill="both", expand=True)
 
 mono = font.Font(family="Consolas", size=11)
 
-line_numbers = tk.Text(ei, width=4, bg=C["panel"], fg=C["muted"],
-                        state="disabled", font=mono, bd=0, pady=5,
-                        selectbackground=C["panel"], cursor="arrow")
-line_numbers.pack(side="left", fill="y")
+# Números de línea
+line_frame = tk.Frame(editor_body, bg=C["bg2"], width=46)
+line_frame.pack(side="left", fill="y")
+line_frame.pack_propagate(False)
 
-tk.Frame(ei, bg=C["border"], width=1).pack(side="left", fill="y")
+line_numbers = tk.Text(line_frame, width=4,
+                       bg=C["bg2"], fg=C["muted"],
+                       state="disabled", font=mono, bd=0,
+                       pady=6, padx=4,
+                       selectbackground=C["bg2"],
+                       cursor="arrow", relief="flat")
+line_numbers.pack(fill="both", expand=True)
 
+tk.Frame(editor_body, bg=C["border"], width=1).pack(side="left", fill="y")
+
+# Editor principal
 editor = scrolledtext.ScrolledText(
-    ei, bg=C["panel"], fg=C["text"],
-    insertbackground=C["accent"], font=mono,
-    relief="flat", bd=0, pady=5, padx=8,
-    selectbackground="#264f78", wrap="none", undo=True)
+    editor_body,
+    bg=C["bg3"], fg=C["text"],
+    insertbackground=C["accent"],
+    font=mono, relief="flat", bd=0,
+    pady=6, padx=10,
+    selectbackground="#2d4a6e",
+    wrap="none", undo=True,
+    tabs=("1c",))
 editor.pack(fill="both", expand=True)
-pane.add(ef, minsize=150)
 
-# ---- Panel de salida con pestanas ----
-of = tk.Frame(pane, bg=C["bg"])
+pane.add(left, minsize=350)
 
+# ================================================================
+#  PANEL DERECHO — SALIDA
+# ================================================================
+right = tk.Frame(pane, bg=C["bg"])
+
+# Cabecera
+out_hdr = tk.Frame(right, bg=C["bg3"], height=30)
+out_hdr.pack(fill="x")
+out_hdr.pack_propagate(False)
+tk.Label(out_hdr, text="  SALIDA",
+         bg=C["bg3"], fg=C["muted"],
+         font=("Consolas", 8, "bold")).pack(side="left", padx=8, pady=6)
+
+# Notebook de pestanas
 style = ttk.Style()
 style.theme_use("default")
-style.configure("Dark.TNotebook",
-    background=C["panel"], borderwidth=0, tabmargins=0)
-style.configure("Dark.TNotebook.Tab",
-    background=C["toolbar"], foreground=C["muted"],
-    padding=[14, 5], font=("Consolas", 9, "bold"), borderwidth=0)
-style.map("Dark.TNotebook.Tab",
-    background=[("selected", C["bg"])],
-    foreground=[("selected", C["text"])])
+style.configure("D.TNotebook",
+    background=C["bg2"], borderwidth=0, tabmargins=[0,0,0,0])
+style.configure("D.TNotebook.Tab",
+    background=C["bg2"], foreground=C["muted"],
+    padding=[16, 6], font=("Consolas", 9, "bold"),
+    borderwidth=0)
+style.map("D.TNotebook.Tab",
+    background=[("selected", C["bg3"])],
+    foreground=[("selected", C["text_bright"])])
 
-notebook  = ttk.Notebook(of, style="Dark.TNotebook")
+notebook = ttk.Notebook(right, style="D.TNotebook")
 notebook.pack(fill="both", expand=True)
-out_font  = font.Font(family="Consolas", size=10)
+out_font = font.Font(family="Consolas", size=10)
 
 
-def make_tab(label):
-    fr = tk.Frame(notebook, bg=C["panel"])
+def _make_tab(label):
+    fr = tk.Frame(notebook, bg=C["bg3"])
     notebook.add(fr, text=f"  {label}  ")
-    w  = scrolledtext.ScrolledText(
-        fr, bg=C["panel"], fg=C["text"],
+    w = scrolledtext.ScrolledText(
+        fr, bg=C["bg3"], fg=C["text"],
         font=out_font, relief="flat", bd=0,
-        pady=5, padx=8, state="disabled")
+        pady=6, padx=4, state="disabled",
+        wrap="none")
     w.pack(fill="both", expand=True)
     return fr, w
 
 
-tab_tokens,  out_tokens  = make_tab("Tokens")
-tab_ast,     out_ast     = make_tab("AST")
-tab_console, out_console = make_tab("Consola")
-pane.add(of, minsize=100)
+tab_tokens,  out_tokens  = _make_tab("Tokens")
+tab_ast,     out_ast     = _make_tab("AST")
+tab_console, out_console = _make_tab("Consola")
 
-# ---- Tags: pestana Tokens ----
-out_tokens.tag_config("header",  foreground=C["muted"],  font=("Consolas", 9, "bold"))
-out_tokens.tag_config("keyword", foreground=C["purple"])
-out_tokens.tag_config("type_tok",foreground=C["accent"])
-out_tokens.tag_config("literal", foreground=C["orange"])
-out_tokens.tag_config("operator",foreground=C["yellow"])
-out_tokens.tag_config("ident",   foreground=C["text"])
-out_tokens.tag_config("delim",   foreground=C["muted"])
-out_tokens.tag_config("muted",   foreground=C["muted"])
-out_tokens.tag_config("normal",  foreground=C["text"])
+pane.add(right, minsize=300)
 
-# ---- Tags: pestana AST ----
-out_ast.tag_config("header",   foreground=C["muted"],  font=("Consolas", 10, "bold"))
-out_ast.tag_config("ast_func", foreground=C["accent"], font=("Consolas", 10, "bold"))
-out_ast.tag_config("ast_let",  foreground=C["purple"])
-out_ast.tag_config("ast_ctrl", foreground=C["yellow"])
-out_ast.tag_config("ast_op",   foreground=C["orange"])
-out_ast.tag_config("ast_call", foreground=C["green"])
-out_ast.tag_config("ast_lit",  foreground=C["orange"])
-out_ast.tag_config("ast_id",   foreground=C["text"])
-out_ast.tag_config("normal",   foreground=C["text"])
+# ================================================================
+#  SYNTAX HIGHLIGHT TAGS (editor)
+# ================================================================
+editor.tag_config("hl_kw",   foreground=C["purple"])
+editor.tag_config("hl_type", foreground=C["cyan"])
+editor.tag_config("hl_num",  foreground=C["orange"])
+editor.tag_config("hl_str",  foreground=C["green"])
+editor.tag_config("hl_cmt",  foreground=C["muted"])
+editor.tag_config("hl_op",   foreground=C["yellow"])
 
-# ---- Tags: pestana Consola ----
-out_console.tag_config("success", foreground=C["green"],  font=("Consolas", 10, "bold"))
-out_console.tag_config("error",   foreground=C["red"])
-out_console.tag_config("warning", foreground=C["yellow"])
-out_console.tag_config("header",  foreground=C["muted"],  font=("Consolas", 9, "bold"))
-out_console.tag_config("muted",   foreground=C["muted"])
-out_console.tag_config("normal",  foreground=C["text"])
+# ================================================================
+#  TAGS: TOKENS
+# ================================================================
+out_tokens.tag_config("tok_pos",   foreground=C["muted"])
+out_tokens.tag_config("tok_kw",    foreground=C["purple"])
+out_tokens.tag_config("tok_type",  foreground=C["cyan"])
+out_tokens.tag_config("tok_lit",   foreground=C["orange"])
+out_tokens.tag_config("tok_op",    foreground=C["yellow"])
+out_tokens.tag_config("tok_id",    foreground=C["text_bright"])
+out_tokens.tag_config("tok_delim", foreground=C["muted"])
+out_tokens.tag_config("dim",       foreground=C["muted"])
 
-# ---- Barra de estado ----
-sb = tk.Frame(root, bg=C["toolbar"], height=24)
-sb.pack(fill="x", side="bottom")
+# ================================================================
+#  TAGS: AST
+# ================================================================
+out_ast.tag_config("ast_fn",     foreground=C["accent"],  font=("Consolas", 10, "bold"))
+out_ast.tag_config("ast_let",    foreground=C["purple"])
+out_ast.tag_config("ast_ctrl",   foreground=C["yellow"])
+out_ast.tag_config("ast_op",     foreground=C["orange"])
+out_ast.tag_config("ast_call",   foreground=C["green"])
+out_ast.tag_config("ast_lit",    foreground=C["orange"])
+out_ast.tag_config("ast_id",     foreground=C["text_bright"])
+out_ast.tag_config("ast_struct", foreground=C["muted"],   font=("Consolas", 10, "bold"))
+out_ast.tag_config("ast_dim",    foreground=C["text"])
 
-status_label = tk.Label(sb, text="  Listo",
-    bg=C["toolbar"], fg=C["muted"],
-    font=("Consolas", 9), anchor="w")
-status_label.pack(side="left", fill="x", expand=True)
+# ================================================================
+#  TAGS: CONSOLA
+# ================================================================
+out_console.tag_config("success",    foreground=C["green"],  font=("Consolas", 10, "bold"))
+out_console.tag_config("error",      foreground=C["red"])
+out_console.tag_config("warning",    foreground=C["yellow"])
+out_console.tag_config("info",       foreground=C["cyan"])
+out_console.tag_config("section_hdr",foreground=C["muted"],  font=("Consolas", 9, "bold"))
+out_console.tag_config("dim",        foreground=C["muted"])
+out_console.tag_config("normal",     foreground=C["text"])
 
-tk.Label(sb, text="Ctrl+O Abrir  |  Ctrl+S Guardar  |  Ctrl+Enter Analizar  ",
-    bg=C["toolbar"], fg=C["border"],
-    font=("Consolas", 8)).pack(side="right")
+# ================================================================
+#  BARRA DE ESTADO
+# ================================================================
+statusbar = tk.Frame(root, bg=C["bg2"], height=26)
+statusbar.pack(fill="x", side="bottom")
+statusbar.pack_propagate(False)
 
-cursor_label = tk.Label(sb, text="Ln 1, Col 1  ",
-    bg=C["toolbar"], fg=C["muted"],
-    font=("Consolas", 9))
+# Indicador de compilador
+compiler_indicator = tk.Label(statusbar, text="",
+    bg=C["bg2"], fg=C["muted"], font=("Consolas", 8))
+compiler_indicator.pack(side="right", padx=10)
+
+cursor_label = tk.Label(statusbar, text="  Ln 1  Col 1  ",
+    bg=C["bg2"], fg=C["muted"], font=("Consolas", 8))
 cursor_label.pack(side="right")
 
-# ---- Codigo de ejemplo (mismo que el documento del proyecto) ----
+tk.Frame(statusbar, bg=C["border"], width=1).pack(side="right", fill="y", pady=4)
+
+status_label = tk.Label(statusbar, text="  Listo",
+    bg=C["bg2"], fg=C["text"], font=("Consolas", 9), anchor="w")
+status_label.pack(side="left", fill="x", expand=True)
+
+# ================================================================
+#  CODIGO INICIAL
+# ================================================================
 EJEMPLO = """\
 // Ejemplo del documento - Compiladores I UNITEC
 fn suma(a: i32, b: i32) -> i32 {
@@ -552,13 +683,20 @@ fn main() {
 """
 editor.insert("1.0", EJEMPLO)
 
-# ---- Detectar compilador al arrancar ----
+# ================================================================
+#  ARRANQUE
+# ================================================================
 compiler_path = find_compiler()
 if compiler_path:
-    actualizar_estado(f"Compilador listo: {compiler_path}")
+    actualizar_estado("  Compilador listo")
+    compiler_indicator.config(
+        text=f"  ● {os.path.basename(os.path.dirname(compiler_path))}/compiler  ",
+        fg=C["green"])
 else:
-    actualizar_estado("Ejecuta 'make' para construir el compilador")
+    actualizar_estado("  Ejecuta 'make' para construir el compilador")
+    compiler_indicator.config(text="  ○ sin compilador  ", fg=C["red"])
 
 bind_shortcuts()
-actualizar_numeros_linea()
+_update_line_count()
+_highlight_syntax()
 root.mainloop()
